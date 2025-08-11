@@ -4,6 +4,7 @@ const cors = require('cors');
 const morgan = require('morgan');
 const { Pool } = require('pg');
 
+
 const app = express();
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
