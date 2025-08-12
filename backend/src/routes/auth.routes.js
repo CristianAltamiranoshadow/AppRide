@@ -1,15 +1,20 @@
 const router = require('express').Router();
-const { registrar, login, obtenerPerfil, subirAvatar } = require('../controllers/auth.controller');
-const { requireAuth } = require('../middlewares/auth');
+const { 
+  registrar, 
+  login, 
+  obtenerPerfil, 
+  subirAvatar 
+} = require('../controllers/auth.controller');
 const { upload } = require('../middlewares/upload');
+const { requireauth } = require('../middlewares/auth');
 
 // Rutas públicas
-// En tu archivo de rutas (auth.routes.js)
-router.post('/register', registrar);  // Cambiar de '/registro' a '/register'
+router.post('/register', upload.single('avatar'), registrar); // Ruta principal en inglés
+router.post('/registro', upload.single('avatar'), registrar); // Alias en español
 router.post('/login', login);
 
-// Rutas protegidas (requieren autenticación)
-router.get('/me', requireAuth(), obtenerPerfil);  // Mejor nombre que "yo"
+// Rutas protegidas
+router.get('/me', requireAuth(), obtenerPerfil);
 router.post('/avatar', requireAuth(), upload.single('avatar'), subirAvatar);
 
 module.exports = router;
