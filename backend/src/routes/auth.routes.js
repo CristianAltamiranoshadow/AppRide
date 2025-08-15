@@ -1,15 +1,28 @@
 const router = require('express').Router();
-const { registrar, login, obtenerPerfil, subirAvatar } = require('../controllers/auth.controller');
-const { requireAuth } = require('../middlewares/auth');
-const { upload } = require('../middlewares/upload');
+const { body } = require('express-validator');
+const { handleValidation } = require('../middlewares/validate');
+const ctrl = require('../controllers/auth.controller');
 
-// Rutas públicas
-// En tu archivo de rutas (auth.routes.js)
-router.post('/register', registrar);  // Cambiar de '/registro' a '/register'
-router.post('/login', login);
+router.post(
+  '/register',
+  [
+    body('rol').isIn(['ESTUDIANTE','CONDUCTOR']).withMessage('Rol inválido'),
+    body('nombre_completo').trim().isLength({ min: 3 }).withMessage('Nombre requerido'),
+    body('correo').isEmail().withMessage('Correo inválido'),
+    body('contrasena').isLength({ min: 6 }).withMessage('Contraseña mínima 6')
+  ],
+  handleValidation,
+  ctrl.register
+);
 
-// Rutas protegidas (requieren autenticación)
-router.get('/me', requireAuth(), obtenerPerfil);  // Mejor nombre que "yo"
-router.post('/avatar', requireAuth(), upload.single('avatar'), subirAvatar);
+router.post(
+  '/login',
+  [
+    body('correo').isEmail().withMessage('Correo inválido'),
+    body('contrasena').notEmpty().withMessage('Contraseña requerida')
+  ],
+  handleValidation,
+  ctrl.login
+);
 
 module.exports = router;

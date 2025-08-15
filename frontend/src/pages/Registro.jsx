@@ -1,443 +1,496 @@
-// src/pages/Registro.jsx
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useForm } from 'react-hook-form';
-import { z } from 'zod';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { MapPin, AlertCircle, CheckCircle, Loader, ChevronRight, Eye, EyeOff } from 'lucide-react';
-import api from '../api/axios';
+import { User, Mail, Lock, Phone, Upload, Eye, EyeOff, MapPin, Car, AlertCircle, CheckCircle, Loader, UserCheck, Truck } from 'lucide-react';
 
-// Validación Zod
-const schema = z.object({
-  rol: z.enum(['ESTUDIANTE', 'CONDUCTOR'], {
-    errorMap: () => ({ message: 'Selecciona un rol válido' }),
-  }),
-  nombre_completo: z.string().min(2, 'Ingresa tu nombre completo'),
-  correo: z.string().email('Correo inválido').refine(email => {
-    const institutionalDomains = [
-      '@universidad.edu.ec',
-      '@estudiantes.universidad.edu.ec',
-      '@epn.edu.ec',
-      '@estudiantes.epn.edu.ec',
-      '@puce.edu.ec',
-      '@estudiantes.puce.edu.ec'
-    ];
-    return institutionalDomains.some(domain => email.toLowerCase().endsWith(domain));
-  }, { message: 'Debe usar un correo institucional válido' }),
-  contrasena: z.string().min(6, 'Mínimo 6 caracteres'),
-  confirmPassword: z.string().min(1, 'Confirma tu contraseña'),
-  telefono: z.string().optional().or(z.literal(''))
-    .refine(phone => phone === '' || /^[0-9+\-\s()]{7,20}$/.test(phone), {
-      message: 'Formato de teléfono inválido',
-    }),
-  info_vehiculo: z.string().optional(),
-  latitud: z.union([z.string(), z.number()])
-    .optional()
-    .transform(v => (v === '' || v === undefined ? undefined : Number(v)))
-    .refine(v => v === undefined || !Number.isNaN(v), {
-      message: 'Latitud debe ser numérica',
-    }),
-  longitud: z.union([z.string(), z.number()])
-    .optional()
-    .transform(v => (v === '' || v === undefined ? undefined : Number(v)))
-    .refine(v => v === undefined || !Number.isNaN(v), {
-      message: 'Longitud debe ser numérica',
-    }),
-  avatar: z.any().optional(),
-}).superRefine((data, ctx) => {
-  if (data.rol === 'CONDUCTOR' && (!data.info_vehiculo || !data.info_vehiculo.trim())) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['info_vehiculo'],
-      message: 'Describe tu vehículo (ej. Toyota PBA-5122)',
-    });
-  }
-  if (data.contrasena !== data.confirmPassword) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['confirmPassword'],
-      message: 'Las contraseñas no coinciden',
-    });
-  }
-});
+const RegistroMovilidad = () => {
+  // Estados del formulario
+  const [formData, setFormData] = useState({
+    nombre_completo: '',
+    correo: '',
+    contrasena: '',
+    confirmPassword: '',
+    telefono: '',
+    rol: 'ESTUDIANTE',
+    info_vehiculo: '',
+    avatar: null,
+    asientos_disponibles: 4 // Nuevo campo para conductores
+  });
 
-export default function Registro() {
-  const nav = useNavigate();
-  const [apiError, setApiError] = useState('');
-  const [imagePreview, setImagePreview] = useState(null);
+  const [location, setLocation] = useState({ latitud: -0.1807, longitud: -78.4678 }); // PUCE por defecto
+  const [errors, setErrors] = useState({});
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [safariLocationState, setSafariLocationState] = useState({
-    loading: false,
-    error: '',
-    success: false,
-    showManualInput: false
-  });
+  const [imagePreview, setImagePreview] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [step, setStep] = useState('form');
+  const [message, setMessage] = useState('');
+  const [gettingLocation, setGettingLocation] = useState(false);
 
-  const {
-    register,
-    handleSubmit,
-    watch,
-    setValue,
-    formState: { errors, isSubmitting },
-  } = useForm({
-    resolver: zodResolver(schema),
-    defaultValues: {
-      rol: 'ESTUDIANTE',
-      nombre_completo: '',
-      correo: '',
-      contrasena: '',
-      confirmPassword: '',
-      telefono: '',
-      info_vehiculo: '',
-      latitud: '',
-      longitud: '',
-      avatar: null,
-    },
-    mode: 'onBlur',
-  });
+  const API_BASE = 'http://localhost:5050/api';
 
-  const rol = watch('rol');
-  const avatarFile = watch('avatar');
-
-  // Detectar Safari
-  const isSafari = () => {
-    return /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+  // Obtener geolocalización
+  const getLocation = () => {
+    setGettingLocation(true);
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setLocation({
+            latitud: position.coords.latitude,
+            longitud: position.coords.longitude
+          });
+          setGettingLocation(false);
+        },
+        (error) => {
+          console.warn('Error obteniendo ubicación:', error);
+          setGettingLocation(false);
+        }
+      );
+    } else {
+      setGettingLocation(false);
+    }
   };
 
-  // Geolocalización optimizada para Safari
-  const obtenerUbicacionSafari = async () => {
-    setSafariLocationState({
-      loading: true,
-      error: '',
-      success: false,
-      showManualInput: false
-    });
+  // Validaciones mejoradas
+  const validateForm = () => {
+    const newErrors = {};
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@(puce|epn)\.edu\.ec$/i;
 
-    if (!navigator.geolocation) {
-      setSafariLocationState(prev => ({ 
-        ...prev, 
-        loading: false,
-        error: 'Geolocalización no soportada en este navegador'
-      }));
+    if (!formData.nombre_completo.trim()) {
+      newErrors.nombre_completo = 'Nombre completo es requerido';
+    }
+
+    if (!formData.correo.trim()) {
+      newErrors.correo = 'Correo es requerido';
+    } else if (!emailRegex.test(formData.correo)) {
+      newErrors.correo = 'Debe usar correo PUCE o EPN (@puce.edu.ec o @epn.edu.ec)';
+    }
+
+    if (!formData.contrasena) {
+      newErrors.contrasena = 'Contraseña es requerida';
+    } else if (formData.contrasena.length < 6) {
+      newErrors.contrasena = 'Mínimo 6 caracteres';
+    }
+
+    if (formData.contrasena !== formData.confirmPassword) {
+      newErrors.confirmPassword = 'Las contraseñas no coinciden';
+    }
+
+    if (formData.rol === 'CONDUCTOR') {
+      if (!formData.info_vehiculo.trim()) {
+        newErrors.info_vehiculo = 'Información del vehículo es requerida';
+      }
+      if (!formData.asientos_disponibles || formData.asientos_disponibles < 1) {
+        newErrors.asientos_disponibles = 'Debe tener al menos 1 asiento';
+      }
+    }
+
+    return newErrors;
+  };
+
+  // Manejar submit del formulario
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const formErrors = validateForm();
+    
+    if (Object.keys(formErrors).length > 0) {
+      setErrors(formErrors);
       return;
     }
 
+    setIsSubmitting(true);
+
     try {
-      const position = await new Promise((resolve, reject) => {
-        const options = {
-          enableHighAccuracy: true,
-          timeout: 15000,
-          maximumAge: 0
-        };
-
-        navigator.geolocation.getCurrentPosition(resolve, reject, options);
-
-        setTimeout(() => {
-          reject(new Error('Tiempo de espera agotado'));
-        }, 16000);
-      });
-
-      setValue('latitud', position.coords.latitude.toString(), { shouldValidate: true });
-      setValue('longitud', position.coords.longitude.toString(), { shouldValidate: true });
+      const formDataToSend = new FormData();
+      formDataToSend.append('nombre_completo', formData.nombre_completo);
+      formDataToSend.append('correo', formData.correo);
+      formDataToSend.append('contrasena', formData.contrasena);
+      formDataToSend.append('telefono', formData.telefono);
+      formDataToSend.append('rol', formData.rol);
+      formDataToSend.append('latitud', location.latitud);
+      formDataToSend.append('longitud', location.longitud);
       
-      setSafariLocationState({
-        loading: false,
-        error: '',
-        success: true,
-        showManualInput: false
+      if (formData.rol === 'CONDUCTOR') {
+        formDataToSend.append('info_vehiculo', formData.info_vehiculo);
+        formDataToSend.append('asientos_disponibles', formData.asientos_disponibles);
+      }
+
+      if (formData.avatar) {
+        formDataToSend.append('avatar', formData.avatar);
+      }
+
+      const response = await fetch(`${API_BASE}/auth/registro`, {
+        method: 'POST',
+        body: formDataToSend
       });
+
+      const data = await response.json();
+
+      if (!response.ok) throw new Error(data.message || 'Error en el registro');
+
+      setStep('success');
+      setMessage('Registro exitoso. ' + (formData.rol === 'CONDUCTOR' ? 
+        'Ahora puedes publicar tus viajes.' : 
+        'Ahora puedes buscar viajes disponibles.'));
 
     } catch (error) {
-      let errorMessage = 'No se pudo obtener la ubicación';
-      let showManual = false;
-
-      if (error.code === 1) {
-        errorMessage = 'Permiso denegado. Por favor habilita la ubicación en Configuración > Privacidad > Servicios de ubicación';
-      } else if (error.code === 2 || error.code === 3) {
-        errorMessage = 'No se pudo determinar tu ubicación. Intenta en un área abierta';
-        showManual = true;
-      } else {
-        errorMessage = error.message;
-        showManual = true;
-      }
-
-      setSafariLocationState({
-        loading: false,
-        error: errorMessage,
-        success: false,
-        showManualInput: showManual
-      });
+      console.error('Error:', error);
+      setStep('error');
+      setMessage(error.message || 'Error al registrar. Intenta nuevamente.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  // Preview de avatar
-  useEffect(() => {
-    if (!avatarFile || avatarFile.length === 0) {
-      setImagePreview(null);
-      return;
-    }
-    const file = avatarFile[0];
-    if (!file.type.startsWith('image/')) {
-      setImagePreview(null);
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = e => setImagePreview(e.target.result);
-    reader.readAsDataURL(file);
-  }, [avatarFile]);
+  // Renderizado condicional
+  if (step === 'success') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md text-center">
+          <CheckCircle className="w-16 h-16 text-green-500 mx-auto mb-4" />
+          <h2 className="text-2xl font-bold text-gray-800 mb-2">¡Registro Exitoso!</h2>
+          <p className="text-gray-600 mb-6">{message}</p>
+          <button
+            onClick={() => window.location.href = formData.rol === 'CONDUCTOR' ? '/conductor' : '/estudiante'}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors"
+          >
+            Continuar a la App
+          </button>
+        </div>
+      </div>
+    );
+  }
 
-  // Obtener ubicación al cambiar rol
-  useEffect(() => {
-    if (rol === 'ESTUDIANTE' && !safariLocationState.success && isSafari()) {
-      obtenerUbicacionSafari();
-    }
-  }, [rol]);
+  if (step === 'error') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-red-50 to-pink-100 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md text-center">
+          <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
+          <h2 className="text-2xl font-bold text-gray-800 mb-2">Error en el Registro</h2>
+          <p className="text-gray-600 mb-6">{message}</p>
+          <button
+            onClick={() => setStep('form')}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors"
+          >
+            Volver a intentar
+          </button>
+        </div>
+      </div>
+    );
+  }
 
-  const onSubmit = async (formData) => {
-    setApiError('');
-    try {
-      const payload = {
-        rol: formData.rol.toUpperCase(),
-        nombre_completo: formData.nombre_completo.trim(),
-        correo: formData.correo.trim().toLowerCase(),
-        contrasena: formData.contrasena,
-        telefono: formData.telefono?.trim() || null,
-        info_vehiculo: formData.rol === 'CONDUCTOR' ? formData.info_vehiculo.trim() : undefined,
-        latitud: formData.latitud ? Number(formData.latitud) : null,
-        longitud: formData.longitud ? Number(formData.longitud) : null,
-      };
-
-      const { data } = await api.post('/auth/register', payload);
-
-      if (formData.avatar && formData.avatar.length > 0 && data.token) {
-        const formDataUpload = new FormData();
-        formDataUpload.append('avatar', formData.avatar[0]);
-        await api.post('/auth/avatar', formDataUpload, {
-          headers: { Authorization: `Bearer ${data.token}` },
-        });
-      }
-
-      localStorage.setItem('token', data.token);
-      localStorage.setItem('usuario', JSON.stringify(data.usuario));
-
-      nav(payload.rol === 'CONDUCTOR' ? '/conductor' : '/estudiante', { replace: true });
-    } catch (err) {
-      const msg = err.response?.data?.error ||
-        (err.response?.status === 409 ? 'El correo ya está registrado' : 'Error al registrar');
-      setApiError(msg);
-    }
-  };
-
+  // Formulario principal
   return (
-    <form onSubmit={handleSubmit(onSubmit)} style={{ maxWidth: 520, margin: '40px auto', display: 'grid', gap: 10 }}>
-      <h2 style={{ textAlign: 'center', fontSize: 36, marginBottom: 16 }}>Registro</h2>
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-2xl">
+        <div className="text-center mb-8">
+          <h1 className="text-3xl font-bold text-gray-800 mb-2">PUCE Ride</h1>
+          <p className="text-gray-600">Registro de {formData.rol === 'CONDUCTOR' ? 'Conductor' : 'Estudiante'}</p>
+        </div>
 
-      {/* Rol */}
-      <label>
-        Tipo de Usuario
-        <select {...register('rol')}>
-          <option value="ESTUDIANTE">Estudiante</option>
-          <option value="CONDUCTOR">Conductor</option>
-        </select>
-      </label>
-      {errors.rol && <small style={{ color: 'red' }}>{errors.rol.message}</small>}
-
-      {/* Nombre completo */}
-      <label>
-        Nombre completo *
-        <input placeholder="Nombre completo" {...register('nombre_completo')} />
-      </label>
-      {errors.nombre_completo && <small style={{ color: 'red' }}>{errors.nombre_completo.message}</small>}
-
-      {/* Correo institucional */}
-      <label>
-        Correo institucional *
-        <input placeholder="correo@puce.edu.ec" {...register('correo')} />
-      </label>
-      {errors.correo && <small style={{ color: 'red' }}>{errors.correo.message}</small>}
-
-      {/* Contraseña */}
-      <label style={{ position: 'relative' }}>
-        Contraseña *
-        <input
-          type={showPassword ? 'text' : 'password'}
-          placeholder="Mínimo 6 caracteres"
-          {...register('contrasena')}
-          style={{ paddingRight: 30 }}
-        />
-        <button
-          type="button"
-          onClick={() => setShowPassword(!showPassword)}
-          style={{
-            position: 'absolute',
-            right: 5,
-            top: '50%',
-            transform: 'translateY(-50%)',
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-          }}
-        >
-          {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-        </button>
-      </label>
-      {errors.contrasena && <small style={{ color: 'red' }}>{errors.contrasena.message}</small>}
-
-      {/* Confirmar Contraseña */}
-      <label style={{ position: 'relative' }}>
-        Confirmar Contraseña *
-        <input
-          type={showConfirmPassword ? 'text' : 'password'}
-          placeholder="Repite tu contraseña"
-          {...register('confirmPassword')}
-          style={{ paddingRight: 30 }}
-        />
-        <button
-          type="button"
-          onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-          style={{
-            position: 'absolute',
-            right: 5,
-            top: '50%',
-            transform: 'translateY(-50%)',
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-          }}
-        >
-          {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-        </button>
-      </label>
-      {errors.confirmPassword && <small style={{ color: 'red' }}>{errors.confirmPassword.message}</small>}
-
-      {/* Teléfono */}
-      <label>
-        Teléfono (opcional)
-        <input placeholder="098..." {...register('telefono')} />
-      </label>
-      {errors.telefono && <small style={{ color: 'red' }}>{errors.telefono.message}</small>}
-
-      {/* Info vehículo */}
-      {rol === 'CONDUCTOR' && (
-        <>
-          <label>
-            Información del vehículo *
-            <input placeholder="Toyota azul PBA-5122" {...register('info_vehiculo')} />
-          </label>
-          {errors.info_vehiculo && <small style={{ color: 'red' }}>{errors.info_vehiculo.message}</small>}
-        </>
-      )}
-
-      {/* Avatar */}
-      <label>
-        Foto de Perfil (PNG, JPG hasta 5MB)
-        <input
-          type="file"
-          accept="image/*"
-          {...register('avatar')}
-        />
-      </label>
-      {imagePreview && (
-        <img
-          src={imagePreview}
-          alt="Preview Avatar"
-          style={{ width: 80, height: 80, borderRadius: '50%', objectFit: 'cover' }}
-        />
-      )}
-      {errors.avatar && <small style={{ color: 'red' }}>{errors.avatar.message}</small>}
-
-      {/* Ubicación para Safari */}
-      {rol === 'ESTUDIANTE' && isSafari() && (
-        <>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <label style={{ flex: 1 }}>
-              Latitud
-              <input 
-                {...register('latitud')}
-                readOnly={!safariLocationState.showManualInput}
-                placeholder="Se detectará automáticamente"
-              />
-              {errors.latitud && <small style={{ color: 'red' }}>{errors.latitud.message}</small>}
-            </label>
-            <label style={{ flex: 1 }}>
-              Longitud
-              <input 
-                {...register('longitud')}
-                readOnly={!safariLocationState.showManualInput}
-                placeholder="Se detectará automáticamente"
-              />
-              {errors.longitud && <small style={{ color: 'red' }}>{errors.longitud.message}</small>}
-            </label>
+        <form onSubmit={handleSubmit} className="space-y-6">
+          {/* Selector de Rol */}
+          <div className="flex justify-center gap-4 mb-6">
+            <button
+              type="button"
+              onClick={() => setFormData({...formData, rol: 'ESTUDIANTE'})}
+              className={`px-6 py-3 rounded-lg border-2 transition-all flex items-center ${
+                formData.rol === 'ESTUDIANTE' 
+                  ? 'border-blue-500 bg-blue-50 text-blue-700' 
+                  : 'border-gray-200 hover:border-gray-300 text-gray-600'
+              }`}
+            >
+              <UserCheck className="mr-2" />
+              Estudiante
+            </button>
+            <button
+              type="button"
+              onClick={() => setFormData({...formData, rol: 'CONDUCTOR'})}
+              className={`px-6 py-3 rounded-lg border-2 transition-all flex items-center ${
+                formData.rol === 'CONDUCTOR' 
+                  ? 'border-blue-500 bg-blue-50 text-blue-700' 
+                  : 'border-gray-200 hover:border-gray-300 text-gray-600'
+              }`}
+            >
+              <Truck className="mr-2" />
+              Conductor
+            </button>
           </div>
 
-          {safariLocationState.loading && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Loader size={16} className="animate-spin" />
-              <span>Detectando tu ubicación...</span>
+          {/* Campos del formulario */}
+          <div className="grid md:grid-cols-2 gap-6">
+            {/* Nombre Completo */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Nombre Completo *
+              </label>
+              <div className="relative">
+                <User className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+                <input
+                  type="text"
+                  name="nombre_completo"
+                  value={formData.nombre_completo}
+                  onChange={(e) => setFormData({...formData, nombre_completo: e.target.value})}
+                  className={`w-full pl-10 pr-3 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${
+                    errors.nombre_completo ? 'border-red-500' : 'border-gray-300'
+                  }`}
+                  placeholder="Ej: Juan Pérez"
+                />
+              </div>
+              {errors.nombre_completo && (
+                <p className="mt-1 text-sm text-red-600">{errors.nombre_completo}</p>
+              )}
             </div>
-          )}
 
-          {safariLocationState.error && (
-            <div style={{ color: 'red', display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <AlertCircle size={16} />
-                <span>{safariLocationState.error}</span>
+            {/* Correo Institucional */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Correo Institucional *
+              </label>
+              <div className="relative">
+                <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+                <input
+                  type="email"
+                  name="correo"
+                  value={formData.correo}
+                  onChange={(e) => setFormData({...formData, correo: e.target.value})}
+                  className={`w-full pl-10 pr-3 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${
+                    errors.correo ? 'border-red-500' : 'border-gray-300'
+                  }`}
+                  placeholder="usuario@puce.edu.ec"
+                />
+              </div>
+              {errors.correo && (
+                <p className="mt-1 text-sm text-red-600">{errors.correo}</p>
+              )}
+            </div>
+
+            {/* Contraseña */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Contraseña *
+              </label>
+              <div className="relative">
+                <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  name="contrasena"
+                  value={formData.contrasena}
+                  onChange={(e) => setFormData({...formData, contrasena: e.target.value})}
+                  className={`w-full pl-10 pr-10 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${
+                    errors.contrasena ? 'border-red-500' : 'border-gray-300'
+                  }`}
+                  placeholder="Mínimo 6 caracteres"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400"
+                >
+                  {showPassword ? <EyeOff /> : <Eye />}
+                </button>
+              </div>
+              {errors.contrasena && (
+                <p className="mt-1 text-sm text-red-600">{errors.contrasena}</p>
+              )}
+            </div>
+
+            {/* Confirmar Contraseña */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Confirmar Contraseña *
+              </label>
+              <div className="relative">
+                <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+                <input
+                  type={showConfirmPassword ? 'text' : 'password'}
+                  name="confirmPassword"
+                  value={formData.confirmPassword}
+                  onChange={(e) => setFormData({...formData, confirmPassword: e.target.value})}
+                  className={`w-full pl-10 pr-10 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${
+                    errors.confirmPassword ? 'border-red-500' : 'border-gray-300'
+                  }`}
+                  placeholder="Repite tu contraseña"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400"
+                >
+                  {showConfirmPassword ? <EyeOff /> : <Eye />}
+                </button>
+              </div>
+              {errors.confirmPassword && (
+                <p className="mt-1 text-sm text-red-600">{errors.confirmPassword}</p>
+              )}
+            </div>
+
+            {/* Teléfono */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Teléfono
+              </label>
+              <div className="relative">
+                <Phone className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+                <input
+                  type="tel"
+                  name="telefono"
+                  value={formData.telefono}
+                  onChange={(e) => setFormData({...formData, telefono: e.target.value})}
+                  className="w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  placeholder="0987654321"
+                />
+              </div>
+            </div>
+
+            {/* Campos específicos para conductores */}
+            {formData.rol === 'CONDUCTOR' && (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Información del Vehículo *
+                  </label>
+                  <div className="relative">
+                    <Car className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+                    <input
+                      type="text"
+                      name="info_vehiculo"
+                      value={formData.info_vehiculo}
+                      onChange={(e) => setFormData({...formData, info_vehiculo: e.target.value})}
+                      className={`w-full pl-10 pr-3 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${
+                        errors.info_vehiculo ? 'border-red-500' : 'border-gray-300'
+                      }`}
+                      placeholder="Ej: Toyota Corolla Azul - ABC123"
+                    />
+                  </div>
+                  {errors.info_vehiculo && (
+                    <p className="mt-1 text-sm text-red-600">{errors.info_vehiculo}</p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Asientos Disponibles *
+                  </label>
+                  <select
+                    name="asientos_disponibles"
+                    value={formData.asientos_disponibles}
+                    onChange={(e) => setFormData({...formData, asientos_disponibles: parseInt(e.target.value)})}
+                    className={`w-full pl-3 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${
+                      errors.asientos_disponibles ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                  >
+                    {[1, 2, 3, 4, 5, 6].map(num => (
+                      <option key={num} value={num}>{num} asiento{num !== 1 ? 's' : ''}</option>
+                    ))}
+                  </select>
+                  {errors.asientos_disponibles && (
+                    <p className="mt-1 text-sm text-red-600">{errors.asientos_disponibles}</p>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Foto de perfil */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Foto de Perfil
+            </label>
+            <div className="flex items-center gap-4">
+              <div className="w-16 h-16 rounded-full bg-gray-100 border-2 border-gray-300 overflow-hidden">
+                {imagePreview ? (
+                  <img src={imagePreview} alt="Preview" className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-gray-400">
+                    <User size={24} />
+                  </div>
+                )}
+              </div>
+              <label className="flex-1">
+                <div className="cursor-pointer bg-white hover:bg-gray-50 border border-gray-300 rounded-lg px-4 py-2 flex items-center justify-center transition-colors">
+                  <Upload size={16} className="mr-2" />
+                  {formData.avatar ? 'Cambiar imagen' : 'Seleccionar imagen'}
+                </div>
+                <input
+                  type="file"
+                  className="hidden"
+                  accept="image/*"
+                  onChange={(e) => {
+                    const file = e.target.files[0];
+                    if (file) {
+                      setFormData({...formData, avatar: file});
+                      setImagePreview(URL.createObjectURL(file));
+                    }
+                  }}
+                />
+              </label>
+            </div>
+            <p className="text-xs text-gray-500 mt-1">Formatos: JPG, PNG (max 5MB)</p>
+          </div>
+
+          {/* Ubicación */}
+          <div className="bg-gray-50 rounded-lg p-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <MapPin className="text-blue-600" />
+                <span className="font-medium">Ubicación Actual</span>
               </div>
               <button
                 type="button"
-                onClick={obtenerUbicacionSafari}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: 'blue',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 4
-                }}
+                onClick={getLocation}
+                className="text-blue-600 text-sm hover:underline flex items-center"
+                disabled={gettingLocation}
               >
-                <ChevronRight size={16} />
-                Reintentar
+                {gettingLocation ? (
+                  <>
+                    <Loader className="animate-spin mr-1" size={16} />
+                    Obteniendo...
+                  </>
+                ) : (
+                  'Actualizar ubicación'
+                )}
               </button>
             </div>
-          )}
+            <p className="text-sm text-gray-600">
+              {location.latitud ? (
+                <>
+                  <span className="font-medium">Lat:</span> {location.latitud.toFixed(6)}, 
+                  <span className="font-medium ml-2">Lng:</span> {location.longitud.toFixed(6)}
+                </>
+              ) : (
+                'Ubicación no disponible'
+              )}
+            </p>
+          </div>
 
-          {safariLocationState.showManualInput && (
-            <div style={{ marginTop: 8 }}>
-              <p style={{ fontSize: 14, marginBottom: 8 }}>O ingresa las coordenadas manualmente:</p>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <input
-                  placeholder="Latitud"
-                  value={watch('latitud')}
-                  onChange={(e) => setValue('latitud', e.target.value)}
-                />
-                <input
-                  placeholder="Longitud"
-                  value={watch('longitud')}
-                  onChange={(e) => setValue('longitud', e.target.value)}
-                />
-              </div>
-            </div>
-          )}
+          {/* Botón de registro */}
+          <button
+            type="submit"
+            disabled={isSubmitting}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
+          >
+            {isSubmitting ? (
+              <>
+                <Loader className="animate-spin" />
+                Registrando...
+              </>
+            ) : (
+              <>
+                <UserCheck />
+                Crear cuenta de {formData.rol === 'CONDUCTOR' ? 'conductor' : 'estudiante'}
+              </>
+            )}
+          </button>
 
-          {safariLocationState.success && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'green' }}>
-              <CheckCircle size={16} />
-              <span>Ubicación detectada correctamente</span>
-            </div>
-          )}
-        </>
-      )}
-
-      {apiError && <div style={{ color: 'red' }}>{apiError}</div>}
-
-      <button 
-        disabled={isSubmitting || (rol === 'ESTUDIANTE' && isSafari() && !safariLocationState.success && !safariLocationState.showManualInput)} 
-        style={{ marginTop: 10, padding: '12px', backgroundColor: '#3f51b5', color: 'white', border: 'none', borderRadius: 4 }}
-      >
-        {isSubmitting ? 'Creando cuenta...' : 'Crear cuenta'}
-      </button>
-    </form>
+          <p className="text-center text-gray-600">
+            ¿Ya tienes cuenta?{' '}
+            <a href="/login" className="text-blue-600 hover:underline">
+              Inicia sesión aquí
+            </a>
+          </p>
+        </form>
+      </div>
+    </div>
   );
-}
+};
+
+export default RegistroMovilidad;
