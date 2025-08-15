@@ -1,63 +1,106 @@
-const bcrypt = require('bcryptjs');
+// src/controllers/auth.controller.js
+const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { z } = require('zod');
 const { pool } = require('../config/db');
-const asyncHandler = require('../utils/asyncHandler');
 
-const registroSchema = z.object({
-  rol: z.enum(['ADMINISTRADOR','CONDUCTOR','ESTUDIANTE']),
-  correo: z.string().email(),
-  contrasena: z.string().min(6),
-  nombre_completo: z.string().min(2),
-  telefono: z.string().optional(),
-  latitud: z.number().optional(),
-  longitud: z.number().optional(),
-  info_vehiculo: z.string().optional()
-});
+const rounds = parseInt(process.env.BCRYPT_ROUNDS || '10', 10);
+const VALID_ROLES = ['ADMINISTRADOR', 'CONDUCTOR', 'ESTUDIANTE'];
 
-exports.registrar = asyncHandler(async (req, res) => {
-  const d = registroSchema.parse(req.body);
-  const hash = await bcrypt.hash(d.contrasena, 10);
-  const q = `
-    INSERT INTO usuarios (rol, correo, contrasena_hash, nombre_completo, telefono, latitud, longitud, info_vehiculo)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-    RETURNING id, rol, correo, nombre_completo, telefono, avatar_url, latitud, longitud, info_vehiculo, creado_en
-  `;
-  const { rows } = await pool.query(q, [
-    d.rol, d.correo, hash, d.nombre_completo, d.telefono || null, d.latitud || null, d.longitud || null, d.info_vehiculo || null
-  ]);
-  const usuario = rows[0];
-  const token = jwt.sign({ id: usuario.id, rol: usuario.rol }, process.env.JWT_SECRETO, { expiresIn: '7d' });
-  res.status(201).json({ usuario, token });
-});
+// Normaliza rol (mapea ADMIN -> ADMINISTRADOR)
+const normalizeRole = (r) => {
+  if (!r) return 'ESTUDIANTE';
+  const up = String(r).trim().toUpperCase();
+  return up === 'ADMIN' ? 'ADMINISTRADOR' : up;
+};
 
-const loginSchema = z.object({
-  correo: z.string().email(),
-  contrasena: z.string().min(6)
-});
+const getJwtSecret = () => {
+  const s = process.env.JWT_SECRET || process.env.JWT_SECRETO;
+  if (!s) throw new Error('Falta JWT_SECRET/JWT_SECRETO en .env');
+  return s;
+};
 
-exports.login = asyncHandler(async (req, res) => {
-  const { correo, contrasena } = loginSchema.parse(req.body);
-  const { rows } = await pool.query(`SELECT * FROM usuarios WHERE correo=$1`, [correo]);
-  const usuario = rows[0];
-  if (!usuario) return res.status(401).json({ error: 'Credenciales inválidas' });
-  const ok = await bcrypt.compare(contrasena, usuario.contrasena_hash);
-  if (!ok) return res.status(401).json({ error: 'Credenciales inválidas' });
-  const token = jwt.sign({ id: usuario.id, rol: usuario.rol }, process.env.JWT_SECRETO, { expiresIn: '7d' });
-  delete usuario.contrasena_hash;
-  res.json({ usuario, token });
-});
+// POST /api/auth/register
+// body: { rol, nombre_completo, correo, contrasena, telefono?, avatar_url?, latitud?, longitud?, info_vehiculo? }
+exports.register = async (req, res, next) => {
+  try {
+    let {
+      rol, nombre_completo, correo, contrasena,
+      telefono, avatar_url, latitud, longitud, info_vehiculo
+    } = req.body;
 
-exports.yo = asyncHandler(async (req, res) => {
-  const { rows } = await pool.query(
-    `SELECT id, rol, correo, nombre_completo, telefono, avatar_url, latitud, longitud, info_vehiculo
-     FROM usuarios WHERE id=$1`, [req.user.id]);
-  res.json(rows[0]);
-});
+    rol = normalizeRole(rol || 'ESTUDIANTE');
+    if (!VALID_ROLES.includes(rol)) return res.status(400).json({ error: 'Rol inválido' });
 
-exports.subirAvatar = asyncHandler(async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'Archivo requerido' });
-  const url = `/uploads/${req.file.filename}`;
-  await pool.query(`UPDATE usuarios SET avatar_url=$1, actualizado_en=now() WHERE id=$2`, [url, req.user.id]);
-  res.json({ avatar_url: url });
-});
+    const correoNorm = (correo || '').trim().toLowerCase();
+    if (!correoNorm) return res.status(400).json({ error: 'Correo requerido' });
+    if (!contrasena) return res.status(400).json({ error: 'Contraseña requerida' });
+    if (!nombre_completo || String(nombre_completo).trim().length < 3) {
+      return res.status(400).json({ error: 'Nombre inválido' });
+    }
+
+    // ¿ya existe?
+    const exist = await pool.query('SELECT id FROM usuarios WHERE correo=$1', [correoNorm]);
+    if (exist.rowCount > 0) return res.status(409).json({ error: 'El correo electrónico ya está registrado' });
+
+    const contrasena_hash = await bcrypt.hash(contrasena, rounds);
+
+    const q = `
+      INSERT INTO usuarios
+        (rol, correo, contrasena_hash, nombre_completo, telefono, avatar_url, latitud, longitud, info_vehiculo)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      RETURNING id, rol, correo, nombre_completo, telefono, avatar_url, latitud, longitud, info_vehiculo
+    `;
+    const { rows } = await pool.query(q, [
+      rol, correoNorm, contrasena_hash, nombre_completo,
+      telefono, avatar_url, latitud, longitud, info_vehiculo
+    ]);
+    const user = rows[0];
+
+    const token = jwt.sign(
+      { id: user.id, rol: user.rol, correo: user.correo },
+      getJwtSecret(),
+      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+    );
+
+    res.status(201).json({ user, token });
+  } catch (e) {
+    if (e && e.code === '23505') {
+      return res.status(409).json({ error: 'El correo electrónico ya está registrado' });
+    }
+    next(e);
+  }
+};
+
+// POST /api/auth/login  { correo, contrasena }
+exports.login = async (req, res, next) => {
+  try {
+    const correoNorm = (req.body.correo || '').trim().toLowerCase();
+    const contrasena = req.body.contrasena;
+
+    if (!correoNorm || !contrasena) {
+      return res.status(400).json({ error: 'Correo y contraseña son requeridos' });
+    }
+
+    const sel = `
+      SELECT id, rol, correo, nombre_completo, telefono, avatar_url, latitud, longitud, info_vehiculo, contrasena_hash
+      FROM usuarios
+      WHERE correo=$1
+    `;
+    const { rows } = await pool.query(sel, [correoNorm]);
+    if (rows.length === 0) return res.status(401).json({ error: 'Credenciales inválidas' });
+
+    const user = rows[0];
+    const ok = await bcrypt.compare(contrasena, user.contrasena_hash);
+    if (!ok) return res.status(401).json({ error: 'Credenciales inválidas' });
+
+    delete user.contrasena_hash;
+
+    const token = jwt.sign(
+      { id: user.id, rol: user.rol, correo: user.correo },
+      getJwtSecret(),
+      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+    );
+
+    res.json({ user, token });
+  } catch (e) { next(e); }
+};

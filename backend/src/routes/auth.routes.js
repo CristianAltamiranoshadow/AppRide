@@ -1,20 +1,28 @@
 const router = require('express').Router();
-const { 
-  registrar, 
-  login, 
-  obtenerPerfil, 
-  subirAvatar 
-} = require('../controllers/auth.controller');
-const { upload } = require('../middlewares/upload');
-const { requireauth } = require('../middlewares/auth');
+const { body } = require('express-validator');
+const { handleValidation } = require('../middlewares/validate');
+const ctrl = require('../controllers/auth.controller');
 
-// Rutas públicas
-router.post('/register', upload.single('avatar'), registrar); // Ruta principal en inglés
-router.post('/registro', upload.single('avatar'), registrar); // Alias en español
-router.post('/login', login);
+router.post(
+  '/register',
+  [
+    body('rol').isIn(['ESTUDIANTE','CONDUCTOR']).withMessage('Rol inválido'),
+    body('nombre_completo').trim().isLength({ min: 3 }).withMessage('Nombre requerido'),
+    body('correo').isEmail().withMessage('Correo inválido'),
+    body('contrasena').isLength({ min: 6 }).withMessage('Contraseña mínima 6')
+  ],
+  handleValidation,
+  ctrl.register
+);
 
-// Rutas protegidas
-router.get('/me', requireAuth(), obtenerPerfil);
-router.post('/avatar', requireAuth(), upload.single('avatar'), subirAvatar);
+router.post(
+  '/login',
+  [
+    body('correo').isEmail().withMessage('Correo inválido'),
+    body('contrasena').notEmpty().withMessage('Contraseña requerida')
+  ],
+  handleValidation,
+  ctrl.login
+);
 
 module.exports = router;
